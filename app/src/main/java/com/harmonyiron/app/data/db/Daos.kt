@@ -4,6 +4,8 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
+import androidx.room.Update
 import com.harmonyiron.app.data.entity.CoachProfileEntity
 import com.harmonyiron.app.data.entity.ExerciseEntity
 import com.harmonyiron.app.data.entity.PlanDayEntity
@@ -52,8 +54,26 @@ interface WorkoutPlanDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPlanItems(items: List<PlanItemEntity>)
 
+    @Update
+    suspend fun updatePlanItem(item: PlanItemEntity)
+
+    @Query("DELETE FROM plan_items WHERE id = :itemId")
+    suspend fun deletePlanItemById(itemId: Long)
+
+    @Query("DELETE FROM plan_items WHERE planDayId = :planDayId")
+    suspend fun deleteItemsForDay(planDayId: Long)
+
+    @Transaction
+    suspend fun replaceItemsForDay(planDayId: Long, newItems: List<PlanItemEntity>) {
+        deleteItemsForDay(planDayId)
+        insertPlanItems(newItems)
+    }
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSnapshot(snapshot: PlanSnapshotEntity): Long
+
+    @Query("SELECT * FROM plan_snapshots WHERE planId = :planId ORDER BY createdAt DESC LIMIT 1")
+    suspend fun getLatestSnapshot(planId: Long): PlanSnapshotEntity?
 }
 
 @Dao

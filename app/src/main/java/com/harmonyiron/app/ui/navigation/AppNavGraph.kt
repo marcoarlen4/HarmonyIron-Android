@@ -5,7 +5,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.ListAlt
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -22,6 +22,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.harmonyiron.app.ui.screen.CoachScreen
 import com.harmonyiron.app.ui.screen.PlansScreen
 import com.harmonyiron.app.ui.screen.SettingsScreen
 import com.harmonyiron.app.ui.screen.StatsScreen
@@ -40,7 +41,7 @@ fun AppNavGraph() {
         BottomTab("today", "今日训练", Icons.Default.FitnessCenter),
         BottomTab("plans", "计划库", Icons.Default.ListAlt),
         BottomTab("stats", "数据分析", Icons.Default.BarChart),
-        BottomTab("settings", "设置", Icons.Default.Settings)
+        BottomTab("coach", "AI 教练", Icons.Default.Psychology)
     )
 
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -93,7 +94,12 @@ fun AppNavGraph() {
             }
             composable("plans") { PlansScreen() }
             composable("stats") { StatsScreen() }
-            composable("settings") { SettingsScreen() }
+            composable("coach") {
+                CoachScreen(onOpenSettings = { navController.navigate("settings") })
+            }
+            composable("settings") {
+                SettingsScreen(onBack = { navController.popBackStack() })
+            }
             composable(
                 route = "session/{dayId}/{dayTitle}",
                 arguments = listOf(
