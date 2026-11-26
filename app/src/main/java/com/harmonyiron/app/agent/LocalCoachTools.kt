@@ -2,6 +2,7 @@ package com.harmonyiron.app.agent
 
 import com.harmonyiron.app.data.db.HarmonyIronDatabase
 import com.harmonyiron.app.data.engine.StrengthMath
+import com.harmonyiron.app.data.entity.CoachProfileEntity
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -25,8 +26,12 @@ class LocalCoachTools(private val db: HarmonyIronDatabase) {
     var latestProposal: PlanDiffProposal? = null
         private set
 
-    fun clearProposal() {
+    var pendingQuestionArgs: InterviewQuestionArgs? = null
+        private set
+
+    fun clearSessionOutputs() {
         latestProposal = null
+        pendingQuestionArgs = null
     }
 
     fun getToolDefinitions(): List<ToolDefinitionDto> = listOf(
@@ -84,6 +89,48 @@ class LocalCoachTools(private val db: HarmonyIronDatabase) {
         ),
         ToolDefinitionDto(
             function = FunctionSpecDto(
+                name = "ask_user_choice",
+                description = "向用户弹出单张结构化选项卡片进行深度访谈追问（每次仅问 1 个关键决策点，首项应标记 isRecommended=true 并附个人数据理由）",
+                parameters = buildJsonObject {
+                    put("type", "object")
+                    putJsonObject("properties") {
+                        putJsonObject("question") {
+                            put("type", "string")
+                            put("description", "简洁明确的问题描述")
+                        }
+                        putJsonObject("allowMultiSelect") {
+                            put("type", "boolean")
+                            put("description", "是否允许多选，默认 false")
+                        }
+                        putJsonObject("options") {
+                            put("type", "array")
+                            put("description", "选项列表，每项包含 label, isRecommended(boolean), reason(可选)")
+                            putJsonObject("items") { put("type", "object") }
+                        }
+                    }
+                    put("required", buildJsonArray {
+                        add(kotlinx.serialization.json.JsonPrimitive("question"))
+                        add(kotlinx.serialization.json.JsonPrimitive("options"))
+                    })
+                }
+            )
+        ),
+        ToolDefinitionDto(
+            function = FunctionSpecDto(
+                name = "update_coach_profile",
+                description = "将访谈中确认的长期训练约束（伤病史、单次时长上限、器械偏好）持久化沉淀至本地教练档案",
+                parameters = buildJsonObject {
+                    put("type", "object")
+                    putJsonObject("properties") {
+                        putJsonObject("injuryNotes") { put("type", "string") }
+                        putJsonObject("maxSessionMinutes") { put("type", "integer") }
+                        putJsonObject("preferredEquipment") { put("type", "string") }
+                    }
+                }
+            )
+        ),
+        ToolDefinitionDto(
+            function = FunctionSpecDto(
                 name = "propose_plan_diff",
                 description = "向用户提交结构化的训练计划修改提案（不会直接修改数据库，由用户预览勾选后生效）",
                 parameters = buildJsonObject {
@@ -125,6 +172,8 @@ class LocalCoachTools(private val db: HarmonyIronDatabase) {
             }
             "get_current_plan" -> buildCurrentPlanJson()
             "get_user_coach_profile" -> buildCoachProfileJson()
+            "ask_user_choice" -> handleAskUserChoice(rawArguments)
+            "update_coach_profile" -> handleUpdateCoachProfile(argsObj)
             "propose_plan_diff" -> handleProposeDiff(rawArguments)
             else -> """{"error": "未知工具: $name"}"""
         }
@@ -241,6 +290,30 @@ class LocalCoachTools(private val db: HarmonyIronDatabase) {
         }
     }
 
+    private fun handleAskUserChoice(rawArguments: String): String {
+        return parseInterviewQuestionArgs(rawArguments).fold(
+            onSuccess = { args ->
+                pendingQuestionArgs = args
+                """{"status": "waiting_user_choice"}"""
+            },
+            onFailure = { err ->
+                """{"error": "提问卡片格式校验失败: ${err.message}"}"""
+            }
+        )
+    }
+
+    private suspend fun handleUpdateCoachProfile(argsObj: JsonObject): String {
+        val current = db.coachProfileDao().getProfile() ?: CoachProfileEntity()
+        val updated = current.copy(
+            injuryNotes = argsObj["injuryNotes"]?.jsonPrimitive?.content ?: current.injuryNotes,
+            maxSessionMinutes = argsObj["maxSessionMinutes"]?.jsonPrimitive?.intOrNull ?: current.maxSessionMinutes,
+            preferredEquipment = argsObj["preferredEquipment"]?.jsonPrimitive?.content ?: current.preferredEquipment,
+            updatedAt = System.currentTimeMillis()
+        )
+        db.coachProfileDao().upsert(updated)
+        return """{"status": "profile_updated"}"""
+    }
+
     private fun handleProposeDiff(rawArguments: String): String {
         return parsePlanDiffProposal(rawArguments).fold(
             onSuccess = { proposal ->
@@ -260,6 +333,13 @@ class LocalCoachTools(private val db: HarmonyIronDatabase) {
             val proposal = lenientJson.decodeFromString<PlanDiffProposal>(rawJson)
             require(proposal.changes.isNotEmpty()) { "变更列表不能为空" }
             proposal
+        }
+
+        fun parseInterviewQuestionArgs(rawJson: String): Result<InterviewQuestionArgs> = runCatching {
+            val parsed = lenientJson.decodeFromString<InterviewQuestionArgs>(rawJson)
+            require(parsed.question.isNotBlank()) { "问题内容不能为空" }
+            require(parsed.options.isNotEmpty()) { "选项列表不能为空" }
+            parsed
         }
     }
 }

@@ -83,10 +83,37 @@ data class DiffChangeItem(
 )
 
 /**
- * UI 展示用的教练回复结果。
+ * Grill-Coach 深度访谈选项与结构化提问卡片模型。
+ */
+@Serializable
+data class InterviewOption(
+    val label: String,
+    val isRecommended: Boolean = false,
+    val reason: String? = null
+)
+
+@Serializable
+data class InterviewQuestionArgs(
+    val question: String,
+    val options: List<InterviewOption> = emptyList(),
+    val allowMultiSelect: Boolean = false
+)
+
+data class InterviewQuestion(
+    val toolCallId: String,
+    val question: String,
+    val options: List<InterviewOption>,
+    val allowMultiSelect: Boolean,
+    val roundIndex: Int
+)
+
+/**
+ * UI 展示用的教练回复结果（支持返回诊断报告、Diff 提案，或暂停等待用户回答追问）。
  */
 data class CoachAgentResponse(
     val analysisReport: String,
     val diffProposal: PlanDiffProposal? = null,
-    val executedTools: List<String> = emptyList()
+    val executedTools: List<String> = emptyList(),
+    val pendingQuestion: InterviewQuestion? = null,
+    val sessionMessages: List<ChatMessageDto> = emptyList()
 )

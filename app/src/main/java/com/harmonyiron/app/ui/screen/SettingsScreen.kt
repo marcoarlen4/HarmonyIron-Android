@@ -21,6 +21,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,6 +40,7 @@ import com.harmonyiron.app.agent.AiConfigStore
 import com.harmonyiron.app.data.backup.HarmonyIronBackupPayload
 import com.harmonyiron.app.data.backup.JsonBackupManager
 import com.harmonyiron.app.data.db.HarmonyIronDatabase
+import com.harmonyiron.app.data.entity.CoachProfileEntity
 import com.harmonyiron.app.ui.theme.IronColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -58,6 +60,13 @@ fun SettingsScreen(onBack: () -> Unit = {}) {
     var modelName by remember { mutableStateOf(initialConfig.modelName) }
     var aiSaveStatus by remember { mutableStateOf<String?>(null) }
     var exportStatus by remember { mutableStateOf<String?>(null) }
+    var coachProfile by remember { mutableStateOf<CoachProfileEntity?>(null) }
+
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            coachProfile = HarmonyIronDatabase.getInstance(context).coachProfileDao().getProfile()
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -205,6 +214,30 @@ fun SettingsScreen(onBack: () -> Unit = {}) {
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-        Text("当前版本：V1.1.0 · 内置端侧 AI 力量教练", color = IronColors.TextSecondary, fontSize = 12.sp)
+
+        // V1.2 Grill-Coach 沉淀的用户教练档案
+        Card(
+            colors = CardDefaults.cardColors(containerColor = IronColors.Surface),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("已沉淀教练档案（V1.2）", color = IronColors.PrimaryOrange, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+                val p = coachProfile
+                Text(
+                    text = if (p == null) {
+                        "暂未沉淀个人约束，启动「深度定制」访谈后将自动记录。"
+                    } else {
+                        "伤病备注：${p.injuryNotes.ifBlank { "无" }}\n单次时长上限：${p.maxSessionMinutes} 分钟\n器械偏好：${p.preferredEquipment.ifBlank { "无特殊偏好" }}"
+                    },
+                    color = IronColors.TextSecondary,
+                    fontSize = 12.sp
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Text("当前版本：V1.2.0 · Grill-Coach 深度访谈版", color = IronColors.TextSecondary, fontSize = 12.sp)
     }
 }

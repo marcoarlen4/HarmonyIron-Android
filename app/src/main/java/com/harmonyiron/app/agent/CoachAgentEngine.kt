@@ -26,6 +26,38 @@ class CoachAgentEngine(
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     suspend fun runAnalysis(userPrompt: String): Result<CoachAgentResponse> = withContext(Dispatchers.IO) {
+        val messages = mutableListOf(
+            ChatMessageDto(role = "system", content = SYSTEM_PROMPT),
+            ChatMessageDto(role = "user", content = userPrompt)
+        )
+        executeReActLoop(messages, currentRound = 0)
+    }
+
+    /**
+     * Grill-Coach 访谈续接：将用户在选项卡片中的选择（或跳过指令）回传给模型并继续推理。
+     */
+    suspend fun resumeAfterChoice(
+        previousMessages: List<ChatMessageDto>,
+        toolCallId: String,
+        userAnswer: String,
+        currentRound: Int
+    ): Result<CoachAgentResponse> = withContext(Dispatchers.IO) {
+        val messages = previousMessages.toMutableList()
+        messages.add(
+            ChatMessageDto(
+                role = "tool",
+                toolCallId = toolCallId,
+                name = "ask_user_choice",
+                content = """{"userChoice": "$userAnswer"}"""
+            )
+        )
+        executeReActLoop(messages, currentRound = currentRound)
+    }
+
+    private suspend fun executeReActLoop(
+        messages: MutableList<ChatMessageDto>,
+        currentRound: Int
+    ): Result<CoachAgentResponse> = withContext(Dispatchers.IO) {
         runCatching {
             val config = configStore.load()
             val effectiveUrl = if (config.useByok) config.baseUrl else AiConfig.BUILTIN_GATEWAY_URL
@@ -36,14 +68,9 @@ class CoachAgentEngine(
             }
 
             val tools = LocalCoachTools(db)
-            tools.clearProposal()
+            tools.clearSessionOutputs()
             val toolDefs = tools.getToolDefinitions()
             val executedTools = mutableListOf<String>()
-
-            val messages = mutableListOf(
-                ChatMessageDto(role = "system", content = SYSTEM_PROMPT),
-                ChatMessageDto(role = "user", content = userPrompt)
-            )
 
             var finalContent = ""
             for (step in 0 until MAX_REACT_STEPS) {
@@ -70,6 +97,24 @@ class CoachAgentEngine(
                 for (call in toolCalls) {
                     executedTools.add(call.function.name)
                     val toolResult = tools.executeTool(call.function.name, call.function.arguments)
+
+                    // 若模型发起 ask_user_choice 追问，立即暂停 ReAct 循环并向前端返回选项卡片
+                    val pendingArgs = tools.pendingQuestionArgs
+                    if (call.function.name == "ask_user_choice" && pendingArgs != null) {
+                        return@runCatching CoachAgentResponse(
+                            analysisReport = assistantMsg.content.orEmpty(),
+                            executedTools = executedTools.distinct(),
+                            pendingQuestion = InterviewQuestion(
+                                toolCallId = call.id,
+                                question = pendingArgs.question,
+                                options = pendingArgs.options,
+                                allowMultiSelect = pendingArgs.allowMultiSelect,
+                                roundIndex = currentRound + 1
+                            ),
+                            sessionMessages = messages.toList()
+                        )
+                    }
+
                     messages.add(
                         ChatMessageDto(
                             role = "tool",
@@ -84,7 +129,8 @@ class CoachAgentEngine(
             CoachAgentResponse(
                 analysisReport = finalContent.ifBlank { "已完成分析，请查看下方训练计划调整建议。" },
                 diffProposal = tools.latestProposal,
-                executedTools = executedTools.distinct()
+                executedTools = executedTools.distinct(),
+                sessionMessages = messages.toList()
             )
         }
     }
@@ -198,12 +244,14 @@ class CoachAgentEngine(
         ): List<DiffChangeItem> = proposal.changes.filter { it.id in selectedIds }
 
         private const val SYSTEM_PROMPT = """
-你是「鸿铁（HarmonyIron）」内置的资深力量训练与体能教练。
-你的职责：
-1. 必须先调用本地工具（get_training_summary、get_current_plan、get_exercise_progress 等）获取真实训练数据，严禁凭空捏造数据。
-2. 基于渐进超负荷、推拉平衡、RPE 疲劳管理及减载周（Deload）原则给出简洁、专业、可执行的诊断建议。
-3. 当建议修改计划时，必须调用 propose_plan_diff 工具输出结构化变更（使用 get_current_plan 返回的真实 planDayId、itemId 和 availableExercises 中的 exerciseId），不要口头承诺修改成功。
-4. 用简体中文回复，重点突出数据依据与动作调整理由。
+你是「鸿铁（HarmonyIron）」内置的资深力量训练与体能教练，具备「AI 深度访谈模式（Grill-Coach Mode）」。
+你的核心工作流：
+1. 【本地数据前置探测】接到任务后，必须先调用 get_training_summary、get_current_plan、get_user_coach_profile 等工具查库补全客观事实。凡是本地数据或教练档案已知的信息，绝不重复提问！
+2. 【Grill-Coach 逐一追问】当用户启动“深度定制计划”或诉求模糊缺失关键约束（如伤病部位、单次可用时长、器械偏好、增肌/减载优先级）时，调用 ask_user_choice 一次仅问 1 个问题：
+   - 第 1 个选项必须标记 isRecommended=true，并在 reason 中附带个人数据依据；
+   - 最多追问 3–5 轮必须收敛（若用户回复跳过，立即停止追问直接生成方案）。
+3. 【偏好沉淀与 Diff 提案】访谈明确长期约束后，调用 update_coach_profile 持久化档案；随后基于渐进超负荷、推拉平衡与 RPE 疲劳管理原则，调用 propose_plan_diff 输出结构化变更（使用真实的 planDayId、itemId 和 availableExercises 中的 exerciseId）。
+4. 用简体中文回复，简洁硬核，重点突出数据依据。
 """
     }
 }
